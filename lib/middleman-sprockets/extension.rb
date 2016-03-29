@@ -22,6 +22,7 @@ module Middleman
       def initialize app, options_hash={}, &block
         super
 
+        @assets                  = Set.new
         @inline_asset_references = Set.new
         @environment             = ::Sprockets::Environment.new
         @interface               = Interface.new options, @environment
@@ -129,10 +130,25 @@ module Middleman
         # that case and we don't want to remove the cache as it
         # gets hit during the resource manipulator
         #
-        def file_watcher _updated_files, _removed_files
+        def file_watcher updated_files, removed_files
           return if app.build?
 
-          environment.cache = ::Sprockets::Cache::MemoryStore.new
+          if ((updated_files + removed_files).map(&:relative_path).map(&:to_s) &
+                (@inline_asset_references + @assets.map(&:path)).to_a).empty?
+            environment.cache = ::Sprockets::Cache::MemoryStore.new
+          end
+
+          if !(updated_files.map(&:relative_path).map(&:to_s) & @assets.map(&:path)).empty? ||
+                !(removed_files.map(&:relative_path).map(&:to_s) & @assets.map(&:path)).empty?
+            reset_sitemap!
+          end
+        end
+
+        def reset_sitemap!
+          @assets                  = Set.new
+          @inline_asset_references = Set.new
+          app.sitemap.rebuild_resource_list!(:'sprockets.asset_change')
+          app.sitemap.ensure_resource_list_updated!
         end
 
         def expose_app_helpers_to_sprockets!
@@ -179,12 +195,14 @@ module Middleman
           raise e
         end
 
-        Contract String, String, String => Resource
+        Contract String, String, String => Or[Resource]
         def generate_resource path, source_file, sprockets_path
           ::Middleman::Util.instrument 'sprockets', name: 'generate_resource',
                                                     path: path,
                                                     sprockets_path: sprockets_path do
-            Resource.new(app.sitemap, path, source_file, sprockets_path, environment)
+            resource = Resource.new(app.sitemap, path, source_file, sprockets_path, environment)
+            @assets << resource
+            resource
           end
         end
 
